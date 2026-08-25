@@ -1,0 +1,20 @@
+{
+  "name": "next-16-3-memory-leak-repro",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "next build",
+    "start": "NODE_OPTIONS=--expose-gc next start",
+    "load": "node scripts/load.mjs"
+  },
+  "dependencies": {
+    "next": "16.3.0",
+    "react": "19.2.6",
+    "react-dom": "19.2.6"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.1",
+    "@types/react": "19.2.6",
+    "typescript": "5.9.3"
+  }
+}
