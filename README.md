@@ -100,4 +100,4 @@ releases everything.
 - `partialPrefetching` — leaks with the flag off
 - `output: standalone` — `next start` over the same artifacts leaks at the same rate
 - a custom `cacheHandlers.default` — held 13 MB while the process held 1.9 GiB
-- TypeScript version, Sentry, and the `MaxListenersExceededWarning` from #97757
+- TypeScript version, Sentry, and the `MaxListenersExceededWarning` from [#97757](https://github.com/vercel/next.js/issues/97757)
