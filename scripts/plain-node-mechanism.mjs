@@ -1,6 +1,6 @@
 // Does an Error kept as AbortSignal.reason retain the closure graph alive at its
 // creation site? Compare retained heap with frame capture on and off.
-// usage: node --expose-gc minrepro.js [on|off]
+// usage: node --expose-gc scripts/plain-node-mechanism.mjs [on|materialize|off]
 // modes: "on" (default V8 behaviour), "off" (no frame capture),
 //        "materialize" (read .stack once, converting frames to a string)
 const mode = ["off", "materialize"].includes(process.argv[2]) ? process.argv[2] : "on";

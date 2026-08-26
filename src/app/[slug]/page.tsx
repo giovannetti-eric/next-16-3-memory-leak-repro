@@ -7,7 +7,8 @@ export function generateStaticParams() {
   return [{ slug: "seed" }];
 }
 
-// A cached scope per slug, sized like a real content page (~200 KB of HTML).
+// A cached scope per slug, sized like a real content page. The response is
+// ~565 KB: the markup plus the RSC payload that carries the same text again.
 async function getContent(slug: string) {
   "use cache";
   const paragraphs = Array.from({ length: 900 }, (_, i) => `${slug} paragraph ${i} ${"lorem ipsum dolor sit amet ".repeat(6)}`);
