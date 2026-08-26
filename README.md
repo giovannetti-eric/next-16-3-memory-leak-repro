@@ -38,6 +38,7 @@ Node v24.5.0, macOS 15 / arm64, 400 distinct slugs at concurrency 8, pages of
 | --- | --- | --- | --- | --- |
 | 16.2.6 | +105.0 MiB | **+0.3 MiB** | +40.5 MiB | **269 KiB** |
 | 16.3.0 | +705.3 MiB | +265.9 MiB | +511.5 MiB | **1806 KiB** |
+| 16.3.3 (pinned here) | — | — | — | **1812 KiB** |
 | 16.3.0, `--stack-trace-limit=2` | +235.2 MiB | +91.5 MiB | +70.8 MiB | **602 KiB** |
 
 On 16.2.6 the heap is flat: the 269 KiB per request is the `use cache` entry for
