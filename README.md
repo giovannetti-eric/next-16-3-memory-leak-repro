@@ -4,11 +4,15 @@ A Next.js server on **16.3.x** retains about **2 MiB per request** under
 high-cardinality traffic and never gives it back. 16.2.6 does not, and neither
 does the 16.4 canary line, on the same app and the same load.
 
-The trigger is one line in `use-cache-wrapper.js`. Between `16.3.0-canary.107`
-and the `16.3.0` stable, `outerWorkUnitStore.renderSignal` was dropped from the
-`AbortSignal.any([...])` that guards a `"use cache"` prerender. Putting it back
-makes the leak go away completely. `scripts/apply-fix.mjs` does that to the
-installed package so you can check it yourself.
+The cause is in `use-cache-wrapper.js`: the `AbortSignal.any([...])` composite
+that guards a `"use cache"` prerender is never aborted on the happy path, so
+Node keeps it, React's abort listener, and everything the listener reaches. The
+fix is [vercel/next.js#97476](https://github.com/vercel/next.js/pull/97476),
+on `main` since 19 Aug and backported to the `next-16-3` branch in
+[#98448](https://github.com/vercel/next.js/pull/98448). No 16.3.x release
+carries it yet; 16.3.4 leaks at the same rate as 16.3.0.
+`scripts/apply-upstream-fix.mjs` applies that fix to the installed package so
+you can check it yourself.
 
 ## Running it
 
@@ -47,13 +51,15 @@ consecutive runs of 400 distinct slugs each. Per-run deltas:
 | --- | --- | --- | --- |
 | 16.2.6 | −0.1 / +0.5 MiB | +39.1 / −0.6 MiB | plateaus |
 | 16.3.3 | +272.1 / +272.7 / +272.4 MiB | +531.2 / +531.0 / +531.1 MiB | **linear** |
+| 16.3.4 | +272.3 / +272.9 / +272.2 MiB | +531.1 / +531.2 / +531.2 MiB | **linear** |
 | 16.4.0-canary.8 | −0.1 / +0.4 / −0.1 MiB | +39.1 / −0.5 / −0.6 MiB | plateaus |
+| 16.3.4 + `apply-upstream-fix.mjs` | −0.2 / +0.3 / 0.0 MiB | +39.3 / −0.5 / −0.6 MiB | plateaus |
 | 16.3.3 + `apply-fix.mjs` | −0.3 / +0.3 / 0.0 MiB | +39.1 / −0.5 / −0.6 MiB | plateaus |
 
 The one-time +39.1 MiB of `arrayBuffers` in the first run is a buffer pool
-filling up. Healthy builds are flat from the second run on. 16.3.3 repeats the
-same delta forever: about 2057 KiB per request, and rss was past 2.8 GiB by the
-end of run three.
+filling up. Healthy builds are flat from the second run on. 16.3.3 and 16.3.4
+repeat the same delta forever: about 2057 KiB per request, and rss was past
+2.8 GiB by the end of run three on both.
 
 To reproduce a row, swap the version and rebuild:
 
@@ -61,7 +67,46 @@ To reproduce a row, swap the version and rebuild:
 npm install next@16.2.6 && rm -rf .next && npm run build
 ```
 
-## The line
+## The upstream fix
+
+[#97476](https://github.com/vercel/next.js/pull/97476) (merged to `main` on
+19 Aug, commit `4a95af8`) is one file, +6/−1. Once the cache prerender
+settles, it snapshots whether the timeout fired and then aborts the timeout
+controller when it takes part in an `AbortSignal.any()` composite:
+
+```js
+ clearTimeout(timer);
++const didTimeout = timeoutAbortController.signal.aborted;
++if (dynamicAccessAbortSignal) {
++    // Release React's listener from the composite signal.
++    timeoutAbortController.abort();
++}
+-if (timeoutAbortController.signal.aborted) {
++if (didTimeout) {
+```
+
+Node retains a non-empty composite signal for as long as it has an abort
+listener. React attaches one during `prerender()` and removes it when the signal
+aborts, so aborting the timeout source is what lets the completed render go.
+
+Every `16.4.0-canary.*` has it, which is why that line measures healthy. The
+16.3 line does not: `16.3.1-canary.24` lacks it, `16.3.1-canary.25` onward has
+it, yet 16.3.2, 16.3.3 and 16.3.4 all ship without it.
+[#98448](https://github.com/vercel/next.js/pull/98448) cherry-picks the commit
+onto `next-16-3` with no conflicts.
+
+`scripts/apply-upstream-fix.mjs` applies the same hunk to
+`node_modules/next/dist/{,esm/}server/use-cache/use-cache-wrapper.js` of any
+16.3.x install; `revert` puts it back. The `16.3.4 + apply-upstream-fix.mjs`
+row above is that patch on a stock 16.3.4, measured back to back with the stock
+row on the same machine.
+
+## The line that flips it
+
+Restoring the line below also stops the leak, and it is how the bug was first
+isolated. It is a diagnostic, not the fix to merge: `main` does not carry the
+line either and does not leak, because #97476 aborts the composite instead.
+`scripts/apply-fix.mjs` applies it.
 
 Diffing the two published artifacts, `16.3.0-canary.107` (healthy, 3 Aug 14:04)
 against `16.3.0` (leaks, 3 Aug 20:34), `dist/server/use-cache/use-cache-wrapper.js`
@@ -85,8 +130,8 @@ Where the memory goes: `makeHangingPromiseWithError` keeps
 signal. Each of those errors carries a V8 stack that was captured and never
 read. With `renderSignal` out of the composition, the composed signal is built
 from a per-call timeout controller whose timer gets cleared, so nothing ever
-aborts it and the listeners are never fired or dropped. That last step is a
-reading of the code, not something I measured directly.
+aborts it and the listeners are never fired or dropped. #97476 closes exactly
+that gap by aborting the controller once the prerender settles.
 
 Capping frame capture supports it. On stock 16.3.3 with
 `--stack-trace-limit=2`, `heapUsed` growth drops from +272 to +94 MiB and
