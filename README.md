@@ -1,18 +1,20 @@
 # next 16.3 memory leak reproduction
 
-A Next.js server on **16.3.x** retains about **2 MiB per request** under
-high-cardinality traffic and never gives it back. 16.2.6 does not, and neither
-does the 16.4 canary line, on the same app and the same load.
+A Next.js server on **16.3.0 through 16.3.4** retains about **2 MiB per
+request** under high-cardinality traffic and never gives it back. 16.2.6 does
+not, neither does the 16.4 canary line, and neither does **16.3.5**, on the
+same app and the same load.
 
 The cause is in `use-cache-wrapper.js`: the `AbortSignal.any([...])` composite
 that guards a `"use cache"` prerender is never aborted on the happy path, so
 Node keeps it, React's abort listener, and everything the listener reaches. The
 fix is [vercel/next.js#97476](https://github.com/vercel/next.js/pull/97476),
 on `main` since 19 Aug and backported to the `next-16-3` branch in
-[#98448](https://github.com/vercel/next.js/pull/98448). No 16.3.x release
-carries it yet; 16.3.4 leaks at the same rate as 16.3.0.
-`scripts/apply-upstream-fix.mjs` applies that fix to the installed package so
-you can check it yourself.
+[#98448](https://github.com/vercel/next.js/pull/98448). **16.3.5**, released
+on 11 Sep, is the first 16.3.x release that carries it, and it measures healthy
+below. 16.3.0 through 16.3.4 leak at the same rate.
+`scripts/apply-upstream-fix.mjs` applies that fix to an installed 16.3.0–16.3.4
+so you can check it yourself.
 
 ## Running it
 
@@ -52,6 +54,7 @@ consecutive runs of 400 distinct slugs each. Per-run deltas:
 | 16.2.6 | −0.1 / +0.5 MiB | +39.1 / −0.6 MiB | plateaus |
 | 16.3.3 | +272.1 / +272.7 / +272.4 MiB | +531.2 / +531.0 / +531.1 MiB | **linear** |
 | 16.3.4 | +272.3 / +272.9 / +272.2 MiB | +531.1 / +531.2 / +531.2 MiB | **linear** |
+| 16.3.5 | +3.2 / +0.3 / −0.1 MiB | +39.1 / −0.6 / −0.6 MiB | plateaus |
 | 16.4.0-canary.8 | −0.1 / +0.4 / −0.1 MiB | +39.1 / −0.5 / −0.6 MiB | plateaus |
 | 16.3.4 + `apply-upstream-fix.mjs` | −0.2 / +0.3 / 0.0 MiB | +39.3 / −0.5 / −0.6 MiB | plateaus |
 | 16.3.3 + `apply-fix.mjs` | −0.3 / +0.3 / 0.0 MiB | +39.1 / −0.5 / −0.6 MiB | plateaus |
@@ -60,6 +63,13 @@ The one-time +39.1 MiB of `arrayBuffers` in the first run is a buffer pool
 filling up. Healthy builds are flat from the second run on. 16.3.3 and 16.3.4
 repeat the same delta forever: about 2057 KiB per request, and rss was past
 2.8 GiB by the end of run three on both.
+
+The 16.3.5 row was measured on 11 Sep, the day it shipped, on Node v24.16.0 and
+macOS 27 / arm64, with a stock 16.3.4 control run back to back on the same
+machine: +273.6 / +271.7 MiB of `heapUsed` and +531.2 / +531.4 MiB of
+`arrayBuffers`, the same rate as the 16.3.4 row above. 16.3.5 bundles the same
+React as the rest of the 16.3 line and ships the #97476 hunk in both
+`dist/server/use-cache/use-cache-wrapper.js` and its `esm/` copy.
 
 To reproduce a row, swap the version and rebuild:
 
@@ -89,15 +99,18 @@ Node retains a non-empty composite signal for as long as it has an abort
 listener. React attaches one during `prerender()` and removes it when the signal
 aborts, so aborting the timeout source is what lets the completed render go.
 
-Every `16.4.0-canary.*` has it, which is why that line measures healthy. The
-16.3 line does not: `16.3.1-canary.24` lacks it, `16.3.1-canary.25` onward has
-it, yet 16.3.2, 16.3.3 and 16.3.4 all ship without it.
+Every `16.4.0-canary.*` has it, which is why that line measures healthy. On the
+16.3 line, `16.3.1-canary.24` lacks it, `16.3.1-canary.25` onward has it, yet
+16.3.2, 16.3.3 and 16.3.4 all ship without it.
 [#98448](https://github.com/vercel/next.js/pull/98448) cherry-picks the commit
-onto `next-16-3` with no conflicts.
+onto `next-16-3` with no conflicts; it merged on 10 Sep and
+[16.3.5](https://github.com/vercel/next.js/releases/tag/v16.3.5) shipped it the
+next day as "Fix `use cache` prerender signal retention".
 
 `scripts/apply-upstream-fix.mjs` applies the same hunk to
-`node_modules/next/dist/{,esm/}server/use-cache/use-cache-wrapper.js` of any
-16.3.x install; `revert` puts it back. The `16.3.4 + apply-upstream-fix.mjs`
+`node_modules/next/dist/{,esm/}server/use-cache/use-cache-wrapper.js` of a
+16.3.0–16.3.4 install; `revert` puts it back, and on 16.3.5 it reports the
+files as already patched. The `16.3.4 + apply-upstream-fix.mjs`
 row above is that patch on a stock 16.3.4, measured back to back with the stock
 row on the same machine.
 
@@ -139,11 +152,12 @@ Capping frame capture supports it. On stock 16.3.3 with
 
 ## Not the vendored React
 
-Every 16.3.x release bundles React `19.3.0-canary-cbb046ab-20260731`. The 16.4
-canaries bundle newer ones (`…-20260819`, `…-20260824`) and don't leak, so a
-React bump looked like the answer. It isn't. Copying the whole
+Every 16.3.x release bundles React `19.3.0-canary-cbb046ab-20260731`, 16.3.5
+included. The 16.4 canaries bundle newer ones (`…-20260819`, `…-20260824`) and
+don't leak, so a React bump looked like the answer. It isn't. Copying the whole
 `dist/compiled/react*` tree from 16.4.0-canary.0 over a 16.3.3 install changes
-nothing: +272.1 / +272.4 / +272.3 MiB of `heapUsed`, same as stock.
+nothing: +272.1 / +272.4 / +272.3 MiB of `heapUsed`, same as stock, and 16.3.5
+plateaus with that same React on board.
 
 Worth knowing: 16.4.0-canary.8 does not have that `renderSignal` line either,
 and it doesn't leak. So main must abort that signal by some other route, and the
